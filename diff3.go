@@ -391,23 +391,23 @@ func diff3MergeIndices[T comparable](a, o, b []T) [][]int {
 
 // Conflict describes a merge conflict
 type Conflict[T any] struct {
-	a      []T
-	aIndex int
-	o      []T
-	oIndex int
-	b      []T
-	bIndex int
+	A      []T
+	AIndex int
+	O      []T
+	OIndex int
+	B      []T
+	BIndex int
 }
 
 // Diff3MergeResult describes a merge result
 type Diff3MergeResult[T any] struct {
-	ok       []T
-	conflict *Conflict[T]
+	Ok       []T
+	Conflict *Conflict[T]
 }
 
 // Diff3Merge applies the output of diff3MergeIndices to actually
 // construct the merged file; the returned result alternates
-// between 'ok' and 'conflict' blocks.
+// between 'Ok' and 'Conflict' blocks.
 func Diff3Merge[T comparable](a, o, b []T, excludeFalseConflicts bool) []*Diff3MergeResult[T] {
 	var result []*Diff3MergeResult[T]
 	files := [][]T{a, o, b}
@@ -416,7 +416,7 @@ func Diff3Merge[T comparable](a, o, b []T, excludeFalseConflicts bool) []*Diff3M
 	var okLines []T
 	flushOk := func() {
 		if len(okLines) != 0 {
-			result = append(result, &Diff3MergeResult[T]{ok: okLines})
+			result = append(result, &Diff3MergeResult[T]{Ok: okLines})
 		}
 		okLines = nil
 	}
@@ -450,13 +450,13 @@ func Diff3Merge[T comparable](a, o, b []T, excludeFalseConflicts bool) []*Diff3M
 			} else {
 				flushOk()
 				result = append(result, &Diff3MergeResult[T]{
-					conflict: &Conflict[T]{
-						a:      a[x[1] : x[1]+x[2]],
-						aIndex: x[1],
-						o:      o[x[3] : x[3]+x[4]],
-						oIndex: x[3],
-						b:      b[x[5] : x[5]+x[6]],
-						bIndex: x[5],
+					Conflict: &Conflict[T]{
+						A:      a[x[1] : x[1]+x[2]],
+						AIndex: x[1],
+						O:      o[x[3] : x[3]+x[4]],
+						OIndex: x[3],
+						B:      b[x[5] : x[5]+x[6]],
+						BIndex: x[5],
 					},
 				})
 			}
@@ -504,12 +504,12 @@ func Merge(a, o, b io.Reader, detailed bool, labelA string, labelB string) (*Mer
 	var lines []string
 	for i := 0; i < len(merger); i++ {
 		var item = merger[i]
-		if item.ok != nil {
-			lines = append(lines, item.ok...)
+		if item.Ok != nil {
+			lines = append(lines, item.Ok...)
 
 		} else {
 			if detailed {
-				var c = diffComm(item.conflict.a, item.conflict.b)
+				var c = diffComm(item.Conflict.A, item.Conflict.B)
 				for j := 0; j < len(c); j++ {
 					var inner = c[j]
 					if inner.common != nil {
@@ -521,7 +521,7 @@ func Merge(a, o, b io.Reader, detailed bool, labelA string, labelB string) (*Mer
 				}
 			} else {
 				conflicts = true
-				lines = addConflictMarkers(lines, item.conflict.a, item.conflict.b, labelA, labelB)
+				lines = addConflictMarkers(lines, item.Conflict.A, item.Conflict.B, labelA, labelB)
 			}
 		}
 	}
