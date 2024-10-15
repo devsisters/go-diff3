@@ -29,16 +29,16 @@ type candidate struct {
 // J. W. Hunt and M. D. McIlroy, An algorithm for differential file
 // comparison, Bell Telephone Laboratories CSTR #41 (1976)
 // http://www.cs.dartmouth.edu/~doug/
-func lcs(file1, file2 []string) *candidate {
-	var equivalenceClasses map[string][]int
+func lcs[T comparable](file1, file2 []T) *candidate {
+	var equivalenceClasses map[T][]int
 	var file2indices []int
 
 	var candidates []*candidate
-	var line string
+	var line T
 	var c *candidate
 	var i, j, jX, r, s int
 
-	equivalenceClasses = make(map[string][]int)
+	equivalenceClasses = make(map[T][]int)
 	for j = 0; j < len(file2); j++ {
 		line = file2[j]
 		equivalenceClasses[line] = append(equivalenceClasses[line], j)
@@ -263,7 +263,7 @@ type diffIndicesResult struct {
 // We apply the LCS to give a simple representation of the
 // offsets and lengths of mismatched chunks in the input
 // files. This is used by diff3MergeIndices below.
-func diffIndices(file1, file2 []string) []*diffIndicesResult {
+func diffIndices[T comparable](file1, file2 []T) []*diffIndicesResult {
 	var result []*diffIndicesResult
 	tail1 := len(file1)
 	tail2 := len(file2)
@@ -304,7 +304,7 @@ func (h hunkList) Less(i, j int) bool { return h[i][0] < h[j][0] }
 // Computer Science (FSTTCS), December 2007.
 //
 // (http://www.cis.upenn.edu/~bcpierce/papers/diff3-short.pdf)
-func diff3MergeIndices(a, o, b []string) [][]int {
+func diff3MergeIndices[T comparable](a, o, b []T) [][]int {
 	m1 := diffIndices(o, a)
 	m2 := diffIndices(o, b)
 
@@ -390,38 +390,38 @@ func diff3MergeIndices(a, o, b []string) [][]int {
 }
 
 // Conflict describes a merge conflict
-type Conflict struct {
-	a      []string
+type Conflict[T any] struct {
+	a      []T
 	aIndex int
-	o      []string
+	o      []T
 	oIndex int
-	b      []string
+	b      []T
 	bIndex int
 }
 
 // Diff3MergeResult describes a merge result
-type Diff3MergeResult struct {
-	ok       []string
-	conflict *Conflict
+type Diff3MergeResult[T any] struct {
+	ok       []T
+	conflict *Conflict[T]
 }
 
 // Diff3Merge applies the output of diff3MergeIndices to actually
 // construct the merged file; the returned result alternates
 // between 'ok' and 'conflict' blocks.
-func Diff3Merge(a, o, b []string, excludeFalseConflicts bool) []*Diff3MergeResult {
-	var result []*Diff3MergeResult
-	files := [][]string{a, o, b}
+func Diff3Merge[T comparable](a, o, b []T, excludeFalseConflicts bool) []*Diff3MergeResult[T] {
+	var result []*Diff3MergeResult[T]
+	files := [][]T{a, o, b}
 	indices := diff3MergeIndices(a, o, b)
 
-	var okLines []string
+	var okLines []T
 	flushOk := func() {
 		if len(okLines) != 0 {
-			result = append(result, &Diff3MergeResult{ok: okLines})
+			result = append(result, &Diff3MergeResult[T]{ok: okLines})
 		}
 		okLines = nil
 	}
 
-	pushOk := func(xs []string) {
+	pushOk := func(xs []T) {
 		for j := 0; j < len(xs); j++ {
 			okLines = append(okLines, xs[j])
 		}
@@ -449,8 +449,8 @@ func Diff3Merge(a, o, b []string, excludeFalseConflicts bool) []*Diff3MergeResul
 				pushOk(files[0][x[1] : x[1]+x[2]])
 			} else {
 				flushOk()
-				result = append(result, &Diff3MergeResult{
-					conflict: &Conflict{
+				result = append(result, &Diff3MergeResult[T]{
+					conflict: &Conflict[T]{
 						a:      a[x[1] : x[1]+x[2]],
 						aIndex: x[1],
 						o:      o[x[3] : x[3]+x[4]],
