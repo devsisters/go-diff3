@@ -184,8 +184,12 @@ func (h hunkList) Less(i, j int) bool { return h[i][0] < h[j][0] }
 //
 // (http://www.cis.upenn.edu/~bcpierce/papers/diff3-short.pdf)
 func diff3MergeIndices[T comparable](a, o, b []T) [][]int {
-	m1 := diffIndices(o, a)
+	m1Ch := make(chan []*diffIndicesResult, 1)
+	go func() {
+		m1Ch <- diffIndices(o, a)
+	}()
 	m2 := diffIndices(o, b)
+	m1 := <-m1Ch
 
 	var hunks []*hunk
 	addHunk := func(h *diffIndicesResult, side int) {
