@@ -12,87 +12,11 @@ package diff3
 import (
 	"fmt"
 	"io"
-	"slices"
 	"sort"
 	"strings"
 
 	"github.com/devsisters/go-diff3/linereader"
 )
-
-type candidate struct {
-	file1index int
-	file2index int
-	chain      *candidate
-}
-
-// Text diff algorithm following Hunt and McIlroy 1976.
-// J. W. Hunt and M. D. McIlroy, An algorithm for differential file
-// comparison, Bell Telephone Laboratories CSTR #41 (1976)
-// http://www.cs.dartmouth.edu/~doug/
-func lcs[T comparable](file1, file2 []T) *candidate {
-	var equivalenceClasses map[T][]int
-	var file2indices []int
-
-	var candidates []*candidate
-	var line T
-	var c *candidate
-	var i, j, jX, r, s int
-
-	equivalenceClasses = make(map[T][]int)
-	for j = 0; j < len(file2); j++ {
-		line = file2[j]
-		equivalenceClasses[line] = append(equivalenceClasses[line], j)
-	}
-
-	candidates = append(candidates, &candidate{file1index: -1, file2index: -1, chain: nil})
-
-	for i = 0; i < len(file1); i++ {
-		line = file1[i]
-		file2indices = equivalenceClasses[line] // || []
-
-		r = 0
-		c = candidates[0]
-
-		for jX = 0; jX < len(file2indices); jX++ {
-			j = file2indices[jX]
-
-			for s = r; s < len(candidates); s++ {
-				if (candidates[s].file2index < j) && ((s == len(candidates)-1) || (candidates[s+1].file2index > j)) {
-					break
-				}
-			}
-
-			if s < len(candidates) {
-				newCandidate := &candidate{file1index: i, file2index: j, chain: candidates[s]}
-				if r == len(candidates) {
-					candidates = append(candidates, c)
-				} else {
-					candidates[r] = c
-				}
-				r = s + 1
-				c = newCandidate
-				if r == len(candidates) {
-					break // no point in examining further (j)s
-				}
-			}
-		}
-
-		if r == len(candidates) {
-			candidates = append(candidates, c)
-		} else {
-			if r > len(candidates) {
-				panic("out of range")
-			} else {
-				candidates[r] = c
-			}
-		}
-	}
-
-	// At this point, we know the LCS: it's in the reverse of the
-	// linked-list through .chain of candidates[candidates.length - 1].
-
-	return candidates[len(candidates)-1]
-}
 
 type resultStruct struct {
 	common []string
@@ -104,48 +28,22 @@ type resultStruct struct {
 // differences between file1 and file2.
 func diffComm(file1, file2 []string) []*resultStruct {
 	var result []*resultStruct
-	var tail1 = len(file1)
-	var tail2 = len(file2)
-	var common = new(resultStruct)
+	var tail1 int
+	for _, diff := range diffIndices(file1, file2) {
+		if diff.file1[0] > tail1 {
+			result = append(result, &resultStruct{
+				common: file1[tail1:diff.file1[0]],
+			})
+		}
+		tail1 = diff.file1[0] + diff.file1[1]
 
-	processCommon := func() {
-		if len(common.common) != 0 {
-			slices.Reverse(common.common)
-			result = append(result, common)
-			common = new(resultStruct)
+		if diff.file1[1] > 0 || diff.file2[1] > 0 {
+			result = append(result, &resultStruct{
+				file1: file1[diff.file1[0] : diff.file1[0]+diff.file1[1]],
+				file2: file2[diff.file2[0] : diff.file2[0]+diff.file2[1]],
+			})
 		}
 	}
-
-	for candidate := lcs(file1, file2); candidate != nil; candidate = candidate.chain {
-		different := new(resultStruct)
-
-		tail1--
-		for tail1 > candidate.file1index {
-			different.file1 = append(different.file1, file1[tail1])
-			tail1--
-		}
-
-		tail2--
-		for tail2 > candidate.file2index {
-			different.file2 = append(different.file2, file2[tail2])
-			tail2--
-		}
-
-		if len(different.file1) != 0 || len(different.file2) != 0 {
-			processCommon()
-			slices.Reverse(different.file1)
-			slices.Reverse(different.file2)
-			result = append(result, different)
-		}
-
-		if tail1 >= 0 {
-			common.common = append(common.common, file1[tail1])
-		}
-	}
-
-	processCommon()
-
-	slices.Reverse(result)
 	return result
 }
 
@@ -164,36 +62,19 @@ type patch struct {
 // diff(1)-style patch.
 func diffPatch(file1, file2 []string) []*patch {
 	var result []*patch
-	var tail1 = len(file1)
-	var tail2 = len(file2)
-
-	cd := func(file []string, offset int, length int) *chunkDescription {
-		var chunk []string
-		for i := 0; i < length; i++ {
-			chunk = append(chunk, file[offset+i])
-		}
+	cd := func(file []string, diff [2]int) *chunkDescription {
 		return &chunkDescription{
-			offset: offset,
-			length: length,
-			chunk:  chunk,
+			offset: diff[0],
+			length: diff[1],
+			chunk:  file[diff[0] : diff[0]+diff[1]],
 		}
 	}
-
-	for candidate := lcs(file1, file2); candidate != nil; candidate = candidate.chain {
-		mismatchLength1 := tail1 - candidate.file1index - 1
-		mismatchLength2 := tail2 - candidate.file2index - 1
-		tail1 = candidate.file1index
-		tail2 = candidate.file2index
-
-		if mismatchLength1 != 0 || mismatchLength2 != 0 {
-			result = append(result, &patch{
-				file1: cd(file1, candidate.file1index+1, mismatchLength1),
-				file2: cd(file2, candidate.file2index+1, mismatchLength2),
-			})
-		}
+	for _, diff := range diffIndices(file1, file2) {
+		result = append(result, &patch{
+			file1: cd(file1, diff.file1),
+			file2: cd(file2, diff.file2),
+		})
 	}
-
-	slices.Reverse(result)
 	return result
 }
 
@@ -256,8 +137,8 @@ func applyPatch(file []string, p []*patch) []string {
 }
 
 type diffIndicesResult struct {
-	file1 []int
-	file2 []int
+	file1 [2]int
+	file2 [2]int
 }
 
 // We apply the LCS to give a simple representation of the
@@ -265,24 +146,22 @@ type diffIndicesResult struct {
 // files. This is used by diff3MergeIndices below.
 func diffIndices[T comparable](file1, file2 []T) []*diffIndicesResult {
 	var result []*diffIndicesResult
-	tail1 := len(file1)
-	tail2 := len(file2)
-
-	for candidate := lcs(file1, file2); candidate != nil; candidate = candidate.chain {
-		mismatchLength1 := tail1 - candidate.file1index - 1
-		mismatchLength2 := tail2 - candidate.file2index - 1
-		tail1 = candidate.file1index
-		tail2 = candidate.file2index
-
-		if mismatchLength1 != 0 || mismatchLength2 != 0 {
-			result = append(result, &diffIndicesResult{
-				file1: []int{tail1 + 1, mismatchLength1},
-				file2: []int{tail2 + 1, mismatchLength2},
-			})
+	var last *diffIndicesResult
+	// Find shortest edit script, and merge adjacent chunks
+	for diff := range shortestEditScript(file1, file2, 0, 0) {
+		if last == nil {
+			last = diff
+		} else if last.file1[0]+last.file1[1] == diff.file1[0] && last.file2[0]+last.file2[1] == diff.file2[0] {
+			last.file1[1] += diff.file1[1]
+			last.file2[1] += diff.file2[1]
+		} else {
+			result = append(result, last)
+			last = diff
 		}
 	}
-
-	slices.Reverse(result)
+	if last != nil {
+		result = append(result, last)
+	}
 	return result
 }
 
