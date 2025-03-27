@@ -16,7 +16,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/epiclabs-io/diff3/linereader"
+	"github.com/devsisters/go-diff3/linereader"
 )
 
 type candidate struct {
@@ -471,7 +471,7 @@ func Diff3Merge(a, o, b []string, excludeFalseConflicts bool) []*Diff3MergeResul
 
 // MergeResult describes a merge result
 type MergeResult struct {
-	Conflicts bool      //Conflict indicates if there is any merge conflict
+	Conflicts bool      // Conflict indicates if there is any merge conflict
 	Result    io.Reader // returns a reader that contains the merge result
 }
 
