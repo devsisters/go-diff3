@@ -96,13 +96,21 @@ func shortestEditScript[T comparable](a, b []T, currentX, currentY int) iter.Seq
 	}
 	x, y, u, v, d := middleSnake(a, b)
 	if d > 1 || (x != u && y != v) {
+		it1 := make(chan iter.Seq[*diffIndicesResult], 1)
+		go func() {
+			it1 <- shortestEditScript[T](a[:x], b[:y], currentX, currentY)
+		}()
+		it2 := make(chan iter.Seq[*diffIndicesResult], 1)
+		go func() {
+			it2 <- shortestEditScript[T](a[u:], b[v:], currentX+u, currentY+v)
+		}()
 		return func(yield func(*diffIndicesResult) bool) {
-			for diff := range shortestEditScript[T](a[:x], b[:y], currentX, currentY) {
+			for diff := range <-it1 {
 				if !yield(diff) {
 					return
 				}
 			}
-			for diff := range shortestEditScript[T](a[u:], b[v:], currentX+u, currentY+v) {
+			for diff := range <-it2 {
 				if !yield(diff) {
 					return
 				}
