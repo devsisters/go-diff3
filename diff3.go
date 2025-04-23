@@ -18,29 +18,29 @@ import (
 	"github.com/devsisters/go-diff3/linereader"
 )
 
-type resultStruct struct {
-	common []string
-	file1  []string
-	file2  []string
+type DiffResult[T any] struct {
+	Common []T
+	File1  []T
+	File2  []T
 }
 
 // We apply the LCS to build a 'comm'-style picture of the
 // differences between file1 and file2.
-func diffComm(file1, file2 []string) []*resultStruct {
-	var result []*resultStruct
+func DiffComm[T comparable](file1, file2 []T) []*DiffResult[T] {
+	var result []*DiffResult[T]
 	var tail1 int
 	for _, diff := range diffIndices(file1, file2) {
 		if diff.file1[0] > tail1 {
-			result = append(result, &resultStruct{
-				common: file1[tail1:diff.file1[0]],
+			result = append(result, &DiffResult[T]{
+				Common: file1[tail1:diff.file1[0]],
 			})
 		}
 		tail1 = diff.file1[0] + diff.file1[1]
 
 		if diff.file1[1] > 0 || diff.file2[1] > 0 {
-			result = append(result, &resultStruct{
-				file1: file1[diff.file1[0] : diff.file1[0]+diff.file1[1]],
-				file2: file2[diff.file2[0] : diff.file2[0]+diff.file2[1]],
+			result = append(result, &DiffResult[T]{
+				File1: file1[diff.file1[0] : diff.file1[0]+diff.file1[1]],
+				File2: file2[diff.file2[0] : diff.file2[0]+diff.file2[1]],
 			})
 		}
 	}
@@ -392,14 +392,14 @@ func Merge(a, o, b io.Reader, detailed bool, labelA string, labelB string) (*Mer
 
 		} else {
 			if detailed {
-				var c = diffComm(item.Conflict.A, item.Conflict.B)
+				var c = DiffComm(item.Conflict.A, item.Conflict.B)
 				for j := 0; j < len(c); j++ {
 					var inner = c[j]
-					if inner.common != nil {
-						lines = append(lines, inner.common...)
+					if inner.Common != nil {
+						lines = append(lines, inner.Common...)
 					} else {
 						conflicts = true
-						lines = addConflictMarkers(lines, inner.file1, inner.file2, labelA, labelB)
+						lines = addConflictMarkers(lines, inner.File1, inner.File2, labelA, labelB)
 					}
 				}
 			} else {
