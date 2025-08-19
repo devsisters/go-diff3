@@ -165,12 +165,38 @@ func diffIndices[T comparable](file1, file2 []T) []*diffIndicesResult {
 	return result
 }
 
-type hunk [5]int
-type hunkList []*hunk
+type hunk struct {
+	OOffset  int
+	OLength  int
+	Side     Side
+	ABOffset int // Offset of A or B, depending on Side
+	ABLength int // Length of A or B, depending on Side
+}
+
+type hunkList []hunk
 
 func (h hunkList) Len() int           { return len(h) }
 func (h hunkList) Swap(i, j int)      { h[i], h[j] = h[j], h[i] }
-func (h hunkList) Less(i, j int) bool { return h[i][0] < h[j][0] }
+func (h hunkList) Less(i, j int) bool { return h[i].OOffset < h[j].OOffset }
+
+type Side int
+
+const (
+	SideConflict Side = iota - 1
+	SideA
+	SideCommon
+	SideB
+)
+
+type MergeIndices struct {
+	Side    Side
+	AOffset int
+	ALength int
+	OOffset int
+	OLength int
+	BOffset int
+	BLength int
+}
 
 // Given three files, A, O, and B, where both A and B are
 // independently derived from O, returns a fairly complicated
@@ -183,7 +209,7 @@ func (h hunkList) Less(i, j int) bool { return h[i][0] < h[j][0] }
 // Computer Science (FSTTCS), December 2007.
 //
 // (http://www.cis.upenn.edu/~bcpierce/papers/diff3-short.pdf)
-func diff3MergeIndices[T comparable](a, o, b []T) [][]int {
+func Diff3MergeIndices[T comparable](a, o, b []T) []MergeIndices {
 	m1Ch := make(chan []*diffIndicesResult, 1)
 	go func() {
 		m1Ch <- diffIndices(o, a)
@@ -191,39 +217,59 @@ func diff3MergeIndices[T comparable](a, o, b []T) [][]int {
 	m2 := diffIndices(o, b)
 	m1 := <-m1Ch
 
-	var hunks []*hunk
-	addHunk := func(h *diffIndicesResult, side int) {
-		hunks = append(hunks, &hunk{h.file1[0], side, h.file1[1], h.file2[0], h.file2[1]})
+	var hunks hunkList
+	addHunk := func(h *diffIndicesResult, side Side) {
+		hunks = append(hunks, hunk{
+			OOffset:  h.file1[0],
+			OLength:  h.file1[1],
+			Side:     side,
+			ABOffset: h.file2[0],
+			ABLength: h.file2[1],
+		})
 	}
 	for i := 0; i < len(m1); i++ {
-		addHunk(m1[i], 0)
+		addHunk(m1[i], SideA)
 	}
 	for i := 0; i < len(m2); i++ {
-		addHunk(m2[i], 2)
+		addHunk(m2[i], SideB)
 	}
-	sort.Sort(hunkList(hunks))
+	sort.Sort(hunks)
 
-	var result [][]int
+	var result []MergeIndices
 	var commonOffset = 0
+	var aOffset = 0 // Track current position in A
+	var bOffset = 0 // Track current position in B
+
 	copyCommon := func(targetOffset int) {
 		if targetOffset > commonOffset {
-			result = append(result, []int{1, commonOffset, targetOffset - commonOffset})
+			length := targetOffset - commonOffset
+			result = append(result, MergeIndices{
+				Side:    SideCommon,
+				AOffset: aOffset,
+				ALength: length,
+				BOffset: bOffset,
+				BLength: length,
+				OOffset: commonOffset,
+				OLength: length,
+			})
 			commonOffset = targetOffset
+			aOffset += length
+			bOffset += length
 		}
 	}
 
 	for hunkIndex := 0; hunkIndex < len(hunks); hunkIndex++ {
 		firstHunkIndex := hunkIndex
 		hunk := hunks[hunkIndex]
-		regionLhs := hunk[0]
-		regionRhs := regionLhs + hunk[2]
+		regionLhs := hunk.OOffset
+		regionRhs := regionLhs + hunk.OLength
 		for hunkIndex < len(hunks)-1 {
 			maybeOverlapping := hunks[hunkIndex+1]
-			maybeLhs := maybeOverlapping[0]
+			maybeLhs := maybeOverlapping.OOffset
 			if maybeLhs > regionRhs {
 				break
 			}
-			regionRhs = max(regionRhs, maybeLhs+maybeOverlapping[2])
+			regionRhs = max(regionRhs, maybeLhs+maybeOverlapping.OLength)
 			hunkIndex++
 		}
 
@@ -232,9 +278,26 @@ func diff3MergeIndices[T comparable](a, o, b []T) [][]int {
 			// The 'overlap' was only one hunk long, meaning that
 			// there's no conflict here. Either a and o were the
 			// same, or b and o were the same.
-			if hunk[4] > 0 {
-				result = append(result, []int{hunk[1], hunk[3], hunk[4]})
+			merge := MergeIndices{
+				Side:    hunk.Side,
+				OOffset: hunk.OOffset,
+				OLength: hunk.OLength,
 			}
+			if merge.Side == SideA {
+				merge.AOffset = aOffset
+				merge.ALength = hunk.ABLength // can be 0 for deletion
+				merge.BOffset = bOffset
+				merge.BLength = hunk.OLength // B unchanged: consumes O-length
+			} else { // SideB
+				merge.BOffset = bOffset
+				merge.BLength = hunk.ABLength // can be 0 for deletion
+				merge.AOffset = aOffset
+				merge.ALength = hunk.OLength // A unchanged: consumes O-length
+			}
+			aOffset += merge.ALength
+			bOffset += merge.BLength
+
+			result = append(result, merge)
 		} else {
 			// A proper conflict. Determine the extents of the
 			// regions involved from a, o and b. Effectively merge
@@ -245,12 +308,12 @@ func diff3MergeIndices[T comparable](a, o, b []T) [][]int {
 			regions := [][]int{{len(a), -1, len(o), -1}, nil, {len(b), -1, len(o), -1}}
 			for i := firstHunkIndex; i <= hunkIndex; i++ {
 				hunk = hunks[i]
-				side := hunk[1]
+				side := hunk.Side
 				r := regions[side]
-				oLhs := hunk[0]
-				oRhs := oLhs + hunk[2]
-				abLhs := hunk[3]
-				abRhs := abLhs + hunk[4]
+				oLhs := hunk.OOffset
+				oRhs := oLhs + hunk.OLength
+				abLhs := hunk.ABOffset
+				abRhs := abLhs + hunk.ABLength
 				r[0] = min(abLhs, r[0])
 				r[1] = max(abRhs, r[1])
 				r[2] = min(oLhs, r[2])
@@ -260,10 +323,18 @@ func diff3MergeIndices[T comparable](a, o, b []T) [][]int {
 			aRhs := regions[0][1] + (regionRhs - regions[0][3])
 			bLhs := regions[2][0] + (regionLhs - regions[2][2])
 			bRhs := regions[2][1] + (regionRhs - regions[2][3])
-			result = append(result, []int{-1,
-				aLhs, aRhs - aLhs,
-				regionLhs, regionRhs - regionLhs,
-				bLhs, bRhs - bLhs})
+			result = append(result, MergeIndices{
+				Side:    SideConflict,
+				AOffset: aOffset,
+				ALength: aRhs - aLhs,
+				BOffset: bOffset,
+				BLength: bRhs - bLhs,
+				OOffset: regionLhs,
+				OLength: regionRhs - regionLhs,
+			})
+			// Update position trackers for conflict region
+			aOffset += aRhs - aLhs
+			bOffset += bRhs - bLhs
 		}
 		commonOffset = regionRhs
 	}
@@ -293,8 +364,7 @@ type Diff3MergeResult[T any] struct {
 // between 'Ok' and 'Conflict' blocks.
 func Diff3Merge[T comparable](a, o, b []T, excludeFalseConflicts bool) []*Diff3MergeResult[T] {
 	var result []*Diff3MergeResult[T]
-	files := [][]T{a, o, b}
-	indices := diff3MergeIndices(a, o, b)
+	indices := Diff3MergeIndices(a, o, b)
 
 	var okLines []T
 	flushOk := func() {
@@ -310,41 +380,42 @@ func Diff3Merge[T comparable](a, o, b []T, excludeFalseConflicts bool) []*Diff3M
 		}
 	}
 
-	isTrueConflict := func(rec []int) bool {
-		if rec[2] != rec[6] {
+	isTrueConflict := func(rec MergeIndices) bool {
+		if rec.ALength != rec.BLength {
 			return true
 		}
-		var aoff = rec[1]
-		var boff = rec[5]
-		for j := 0; j < rec[2]; j++ {
-			if a[j+aoff] != b[j+boff] {
+		for j := 0; j < rec.ALength; j++ {
+			if a[j+rec.AOffset] != b[j+rec.BOffset] {
 				return true
 			}
 		}
 		return false
 	}
 
-	for i := 0; i < len(indices); i++ {
-		var x = indices[i]
-		var side = x[0]
-		if side == -1 {
+	for _, x := range indices {
+		switch x.Side {
+		case SideConflict:
 			if excludeFalseConflicts && !isTrueConflict(x) {
-				pushOk(files[0][x[1] : x[1]+x[2]])
+				pushOk(a[x.AOffset : x.AOffset+x.ALength])
 			} else {
 				flushOk()
 				result = append(result, &Diff3MergeResult[T]{
 					Conflict: &Conflict[T]{
-						A:      a[x[1] : x[1]+x[2]],
-						AIndex: x[1],
-						O:      o[x[3] : x[3]+x[4]],
-						OIndex: x[3],
-						B:      b[x[5] : x[5]+x[6]],
-						BIndex: x[5],
+						A:      a[x.AOffset : x.AOffset+x.ALength],
+						AIndex: x.AOffset,
+						O:      o[x.OOffset : x.OOffset+x.OLength],
+						OIndex: x.OOffset,
+						B:      b[x.BOffset : x.BOffset+x.BLength],
+						BIndex: x.BOffset,
 					},
 				})
 			}
-		} else {
-			pushOk(files[side][x[1] : x[1]+x[2]])
+		case SideA:
+			pushOk(a[x.AOffset : x.AOffset+x.ALength])
+		case SideB:
+			pushOk(b[x.BOffset : x.BOffset+x.BLength])
+		case SideCommon:
+			pushOk(o[x.OOffset : x.OOffset+x.OLength])
 		}
 	}
 
